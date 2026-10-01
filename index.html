@@ -275,12 +275,12 @@
   .logrow{
     display:flex; align-items:center; gap:8px; padding:10px 14px 14px; border-top:1px solid var(--border);
   }
-  .dor-select{display:flex; gap:4px; flex:1;}
-  .dor-chip{
+  .reps-select{display:flex; gap:4px; flex:1;}
+  .reps-chip{
     flex:1; text-align:center; font-size:11px; padding:7px 0; border-radius:7px;
     background:var(--surface-2); border:1px solid var(--border); color:var(--text-dim); font-weight:700;
   }
-  .dor-chip.sel{background:var(--danger); border-color:var(--danger); color:#1A1414;}
+  .reps-chip.sel{background:var(--danger); border-color:var(--danger); color:#1A1414;}
   .save-btn{
     flex-shrink:0; background:var(--tier-color); color:#10131a; font-weight:800; font-size:12px;
     border:none; border-radius:9px; padding:9px 14px;
@@ -327,6 +327,120 @@
   }
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
 </style>
+<style>
+  .clear-hist-btn{margin-top:10px; padding:8px 12px; border:1px solid var(--danger); border-radius:8px; background:transparent; color:var(--danger); font-size:12px; cursor:pointer;}
+.training-progress{max-width:720px; margin:20px auto; padding:18px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-sizing:border-box;}
+.training-progress h2{margin:0 0 8px; font-size:21px; color:var(--text);}
+.progress-note,.progress-empty{font-size:12px; line-height:1.6; color:var(--text-dim);}
+.progress-scroll{overflow-x:auto; padding:8px 0;}
+.progress-scroll:focus-visible{outline:2px solid var(--composto); outline-offset:3px;}
+.progress-panel{margin-bottom:24px;}
+.progress-panel h3{font-size:13px; color:var(--text); margin:0 0 14px;}
+.progress-bars{display:flex; gap:8px; padding:0 4px;}
+.progress-column{flex:1; min-width:72px; text-align:center;}
+.progress-track{height:140px; padding-top:25px; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; border-bottom:1px solid var(--border); position:relative; box-sizing:content-box; background:repeating-linear-gradient(to top, transparent 0, transparent 34px, var(--border) 35px);}
+.progress-bar{width:65%; max-width:54px; border-radius:5px 5px 0 0; flex-shrink:0;}
+.progress-value{position:absolute; top:3px; font-size:11px; color:var(--text);}
+.progress-date{display:block; margin-top:8px; font-size:10px; color:var(--text-dim); white-space:nowrap;}
+@media(max-width:760px){.training-progress{margin:16px 12px; padding:14px;}}
+
+</style>
+<script>
+(function(root){
+  function aggregate(records){
+    const days = new Map();
+    for(const entry of records){
+      if(!entry || entry.unit !== 'kg' || !Number.isFinite(entry.weight) || entry.weight <= 0) continue;
+      const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(entry.date);
+      if(!match) continue;
+      const [, d, m, y] = match;
+      const date = new Date(Number(y), Number(m)-1, Number(d));
+      if(date.getFullYear() !== Number(y) || date.getMonth() !== Number(m)-1 || date.getDate() !== Number(d)) continue;
+      const key = `${y}-${m}-${d}`;
+      if(!days.has(key)) days.set(key, {key, date:entry.date, weight:0, reps:0, count:0, pairedCount:0});
+      const day = days.get(key);
+      day.weight += entry.weight;
+      day.count++;
+      if(Number.isInteger(entry.reps) && entry.reps > 0){
+        day.reps += entry.reps;
+        day.pairedCount++;
+      }
+    }
+    return [...days.values()].sort((a,b)=>a.key.localeCompare(b.key)).map(day=>({
+      ...day,
+      reps:day.pairedCount ? day.reps : null,
+      averageReps:day.pairedCount ? day.reps / day.pairedCount : null,
+      averageWeight:day.weight / day.count
+    }));
+  }
+
+  function render(container, records){
+    container.replaceChildren();
+    const days = aggregate(records);
+    if(!days.length){
+      const empty = document.createElement('p');
+      empty.className = 'progress-empty';
+      empty.textContent = 'Salve a carga e as repetições dos exercícios para acompanhar sua evolução por dia.';
+      container.appendChild(empty);
+      return;
+    }
+    const scroll = document.createElement('div');
+    scroll.className = 'progress-scroll';
+    scroll.tabIndex = 0;
+    scroll.setAttribute('role', 'region');
+    scroll.setAttribute('aria-label', 'Gráficos diários. Role horizontalmente para comparar todas as datas.');
+    const plots = document.createElement('div');
+    plots.className = 'progress-plots';
+    plots.style.minWidth = `${Math.max(280, days.length * 88)}px`;
+    const metrics = [
+      {key:'weight', label:'Peso total', unit:'kg', color:'#7dd3fc', digits:1},
+      {key:'reps', label:'Repetições totais', unit:'rep', color:'#c4b5fd', digits:0},
+      {key:'averageReps', label:'Média de repetições por registro', unit:'rep', color:'#86efac', digits:1},
+      {key:'averageWeight', label:'Média de carga por registro', unit:'kg', color:'#fcd34d', digits:1}
+    ];
+    for(const metric of metrics){
+      const panel = document.createElement('section');
+      panel.className = 'progress-panel';
+      const heading = document.createElement('h3');
+      heading.textContent = `${metric.label} (${metric.unit})`;
+      panel.appendChild(heading);
+      const chart = document.createElement('div');
+      chart.className = 'progress-bars';
+      const max = Math.max(...days.map(day=>day[metric.key] || 0), 0.001);
+      for(const day of days){
+        const value = day[metric.key];
+        const formatted = value === null ? 'Sem dados' : value.toLocaleString('pt-BR', {maximumFractionDigits:metric.digits});
+        const column = document.createElement('div');
+        column.className = 'progress-column';
+        column.title = `${day.date}: ${formatted}${value === null ? '' : ' ' + metric.unit} · ${day.count} registro(s), ${day.pairedCount} com repetições`;
+        const track = document.createElement('div');
+        track.className = 'progress-track';
+        const bar = document.createElement('div');
+        bar.className = 'progress-bar';
+        bar.style.height = `${value === null ? 0 : value / max * 100}%`;
+        bar.style.backgroundColor = metric.color;
+        bar.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.className = 'progress-value';
+        label.textContent = formatted;
+        track.append(bar, label);
+        const date = document.createElement('span');
+        date.className = 'progress-date';
+        date.textContent = day.date;
+        column.append(track, date);
+        chart.appendChild(column);
+      }
+      panel.appendChild(chart);
+      plots.appendChild(panel);
+    }
+    scroll.appendChild(plots);
+    container.appendChild(scroll);
+    scroll.scrollLeft = scroll.scrollWidth;
+  }
+  root.TrainingProgress = {aggregate, render};
+})(typeof window === 'undefined' ? globalThis : window);
+
+</script>
 </head>
 <body>
 
@@ -372,6 +486,12 @@
 </div>
 
 <main id="main"></main>
+<section class="training-progress" aria-labelledby="progressTitle">
+  <h2 id="progressTitle">Evolução por dia</h2>
+  <p class="progress-note">Todos os exercícios deste treino, agrupados pela data do registro. Peso total = soma das cargas salvas. Médias = total dividido pelo número de registros. Cada salvamento conta como um registro; cardio não entra nos cálculos.</p>
+  <p class="progress-note">Registros sem repetições entram apenas nos cálculos de carga. Role para os lados para comparar as datas.</p>
+  <div id="trainingProgress"></div>
+</section>
 
 <div class="footer-note">
   Baseado no Método USA 2X — Pump Definitivo (Full Body, 4x por semana). A CBF é uma merda o PT também!!!!.<br>Treino cedido por João.
@@ -621,9 +741,8 @@ async function loadHist(dayId, idx){
 async function pushHist(dayId, idx, entry){
   const h = await loadHist(dayId, idx);
   h.unshift(entry);
-  const trimmed = h.slice(0, 6);
-  lsSet(histKey(dayId, idx), JSON.stringify(trimmed));
-  return trimmed;
+  if(!lsSet(histKey(dayId, idx), JSON.stringify(h))) return null;
+  return h;
 }
 
 function addedKey(dayId){ return `added:${dayId}`; }
@@ -703,6 +822,7 @@ function loadStackHTML(tier, topVal, showFeeder, showBackoff){
 }
 
 async function renderDay(){
+  renderProgress();
   const main = document.getElementById("main");
   const day = DAYS[currentDay];
   main.innerHTML = "";
@@ -999,22 +1119,26 @@ async function renderDay(){
     card.appendChild(steps);
 
     {
-      const hist = await loadHist(currentDay, idKey);
+      const historyDay = currentDay;
+      const hist = await loadHist(historyDay, idKey);
       const logrow = document.createElement("div");
       logrow.className = "logrow";
-      let selectedDor = null;
-      const dorWrap = document.createElement("div");
-      dorWrap.className = "dor-select";
-      [0,1,2,3,4,5].forEach(v=>{
+      const repsLabel = document.createElement("div");
+      repsLabel.textContent = "Repetições da carga máxima";
+      card.appendChild(repsLabel);
+      let selectedReps = null;
+      const repsWrap = document.createElement("div");
+      repsWrap.className = "reps-select";
+      [4,5,6,7,8,9].forEach(v=>{
         const chip = document.createElement("div");
-        chip.className = "dor-chip";
-        chip.textContent = v===5 ? "5+" : v;
+        chip.className = "reps-chip";
+        chip.textContent = v;
         chip.onclick = ()=>{
-          selectedDor = v;
-          dorWrap.querySelectorAll(".dor-chip").forEach(c=>c.classList.remove("sel"));
+          selectedReps = v;
+          repsWrap.querySelectorAll(".reps-chip").forEach(c=>c.classList.remove("sel"));
           chip.classList.add("sel");
         };
-        dorWrap.appendChild(chip);
+        repsWrap.appendChild(chip);
       });
       const saveBtn = document.createElement("button");
       saveBtn.className = "save-btn";
@@ -1022,18 +1146,20 @@ async function renderDay(){
       saveBtn.onclick = async ()=>{
         const w = await loadWeight(currentDay, idKey);
         if(!w){ showToast(isCardio ? "Preencha o tempo primeiro" : "Preencha a carga usada primeiro"); return; }
-        const entry = { date: new Date().toLocaleDateString('pt-BR'), weight: w, dor: selectedDor };
-        const updated = await pushHist(currentDay, idKey, entry);
-        renderHistList(histList, updated, unitLabel);
+        const entry = { date: new Date().toLocaleDateString('pt-BR'), weight: w, reps: selectedReps, unit: unitLabel };
+        const updated = await pushHist(historyDay, idKey, entry);
+        if(!updated){ showToast("Não foi possível salvar o registro. Tente novamente."); return; }
+        renderHistList(histList, updated, unitLabel, historyDay, idKey);
+        renderProgress();
         showToast("Registrado no histórico");
       };
-      logrow.appendChild(dorWrap);
+      logrow.appendChild(repsWrap);
       logrow.appendChild(saveBtn);
       card.appendChild(logrow);
 
       const histList = document.createElement("div");
       histList.className = "hist";
-      renderHistList(histList, hist, unitLabel);
+      renderHistList(histList, hist, unitLabel, historyDay, idKey);
       card.appendChild(histList);
     }
 
@@ -1067,18 +1193,63 @@ async function renderDay(){
   main.appendChild(addBtn);
 }
 
-function renderHistList(el, hist, unit){
+function renderProgress(){
+  const records = [];
+  for(let i=0; i<localStorage.length; i++){
+    const key = localStorage.key(i);
+    if(!key || !key.startsWith(LS_PREFIX + "hist:")) continue;
+    try{
+      const [, dayId, idKey] = key.slice(LS_PREFIX.length).split(":");
+      const history = JSON.parse(localStorage.getItem(key));
+      if(!Array.isArray(history)) continue;
+      const added = idKey.startsWith("a");
+      const exercise = added
+        ? (JSON.parse(lsGet(addedKey(dayId)) || "[]"))[Number(idKey.slice(1))]
+        : DAYS[dayId]?.exercises?.[Number(idKey)];
+      const custom = JSON.parse(lsGet(customKey(dayId, idKey)) || "{}");
+      const tier = (added ? exercise?.tier : custom.tier || exercise?.tier);
+      for(const entry of history){
+        if(!entry || typeof entry !== "object") continue;
+        const unit = entry.unit || (tier === "cardio" ? "min" : tier ? "kg" : null);
+        records.push({...entry, unit});
+      }
+    }catch(error){ console.error("Falha ao ler histórico", error); }
+  }
+  TrainingProgress.render(document.getElementById("trainingProgress"), records);
+}
+
+function renderHistList(el, hist, unit, dayId, idKey){
   unit = unit || "kg";
   if(!hist || hist.length===0){
     el.innerHTML = `<div class="hist-empty">Sem histórico ainda — salve a primeira sessão.</div>`;
     return;
   }
-  el.innerHTML = hist.map(h=>`
+  const dateKey = date => date.split('/').reverse().join('-');
+  const recentDates = [...new Set(hist.map(h=>h.date))]
+    .sort((a,b)=>dateKey(b).localeCompare(dateKey(a))).slice(0, 4);
+  const visibleHist = hist.filter(h=>recentDates.includes(h.date))
+    .sort((a,b)=>dateKey(b.date).localeCompare(dateKey(a.date)));
+  el.innerHTML = visibleHist.map(h=>`
     <div class="hist-item">
       <span>${h.date}</span>
-      <span>${fmtVal(h.weight, unit)}${h.dor!==null && h.dor!==undefined ? ` · dor ${h.dor===5?'5+':h.dor}` : ''}</span>
+      <span>${fmtVal(h.weight, unit)}${h.reps!==null && h.reps!==undefined ? ` · ${h.reps} repetições na carga máxima` : ''}</span>
     </div>
   `).join("");
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.className = "clear-hist-btn";
+  clearBtn.textContent = "Apagar histórico deste exercício";
+  clearBtn.onclick = ()=>{
+    if(!confirm("Apagar o histórico somente deste exercício?")) return;
+    if(!lsSet(histKey(dayId, idKey), JSON.stringify([]))){
+      showToast("Não foi possível apagar o histórico. Tente novamente.");
+      return;
+    }
+    renderHistList(el, [], unit, dayId, idKey);
+    renderProgress();
+    showToast("Histórico do exercício apagado");
+  };
+  el.appendChild(clearBtn);
 }
 
 /* ---------- backup ---------- */
